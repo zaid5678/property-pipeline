@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Properties — Property Pipeline{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <h2>Scraped Properties</h2>
+  <p>All listings found by the scraper</p>
+</div>
+
+<!-- Filters -->
+<div class="card" style="margin-bottom:16px">
+  <form method="get" action="{{ url_for('properties') }}">
+    <div class="filters">
+      <div>
+        <label>Search</label>
+        <input type="text" name="search" value="{{ search }}" placeholder="Title or location..." style="width:200px">
+      </div>
+      <div>
+        <label>Source</label>
+        <select name="source" style="width:140px">
+          <option value="">All sources</option>
+          <option value="gumtree" {{ 'selected' if source=='gumtree' }}>Gumtree</option>
+          <option value="rightmove" {{ 'selected' if source=='rightmove' }}>Rightmove</option>
+        </select>
+      </div>
+      <div>
+        <label>Min price (£)</label>
+        <input type="number" name="min_price" value="{{ min_price }}" placeholder="50000" style="width:110px">
+      </div>
+      <div>
+        <label>Max price (£)</label>
+        <input type="number" name="max_price" value="{{ max_price }}" placeholder="300000" style="width:110px">
+      </div>
+      <button type="submit" class="btn btn-primary">Filter</button>
+      <a href="{{ url_for('properties') }}" class="btn" style="background:#eee;color:#333">Clear</a>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>Title</th>
+          <th>Price</th>
+          <th>Location</th>
+          <th>Phone</th>
+          <th>Posted</th>
+          <th>Scraped</th>
+          <th>Link</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in properties %}
+        <tr>
+          <td>
+            <span class="badge {{ 'badge-blue' if p.source == 'gumtree' else 'badge-green' }}">
+              {{ p.source }}
+            </span>
+          </td>
+          <td style="max-width:240px">{{ p.title or '—' }}</td>
+          <td style="font-weight:700;color:var(--navy)">
+            {% if p.price %}£{{ "{:,}".format(p.price) }}{% else %}POA{% endif %}
+          </td>
+          <td>{{ p.location or '—' }}</td>
+          <td style="color:var(--red);font-weight:600">{{ p.phone or '—' }}</td>
+          <td style="color:var(--muted);font-size:0.8rem">{{ (p.posted_date or '—')[:20] }}</td>
+          <td style="color:var(--muted);font-size:0.8rem">{{ (p.scraped_at or '—')[:16] }}</td>
+          <td>
+            <a href="{{ p.url }}" target="_blank" class="btn btn-primary btn-sm">View →</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:40px">
+          No properties found. Run the scraper first: <code>python main.py</code>
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if properties %}
+  <p style="margin-top:12px;font-size:0.8rem;color:var(--muted)">
+    Showing {{ properties|length }} listing(s)
+  </p>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,49 @@
+# Property Pipeline Configuration
+# Edit this file to customise your sourcing criteria.
+
+scraper:
+  # UK towns, cities, or postcodes to search
+  target_areas:
+    - Birmingham
+    - Manchester
+    - Leeds
+    - Nottingham
+    - Sheffield
+    - Liverpool
+    - Bradford
+    - Leicester
+
+  price:
+    min: 50000
+    max: 250000
+
+  # Interval in minutes between scrape runs
+  interval_minutes: 60
+
+  # Seconds to wait between HTTP requests (be polite to servers)
+  request_delay: 3
+
+analysis:
+  # Minimum Below Market Value percentage to PASS
+  min_bmv_percent: 15
+
+  # Minimum gross rental yield percentage to PASS
+  min_gross_yield: 7.0
+
+  # Assumed costs as % of rent (management, maintenance, insurance, voids)
+  assumed_costs_percent: 25
+
+crm:
+  # Hours before flagging an investor who hasn't responded
+  follow_up_hours: 48
+
+deals:
+  # Default sourcing fee in £
+  sourcing_fee: 3000
+
+  # Payment terms to include in Sourcing Agreement
+  payment_terms: "50% on exchange of contracts, 50% on completion"
+
+alerts:
+  # Set to true to send email alerts for new listings
+  email_enabled: true

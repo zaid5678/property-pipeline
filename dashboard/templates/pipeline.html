@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Deal Pipeline — Property Pipeline{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <h2>Deal Pipeline</h2>
+  <p>Track deals from discovery to fee received</p>
+</div>
+
+{% set status_colours = {
+  'found': '#3498db',
+  'analysed': '#9b59b6',
+  'sent': '#e67e22',
+  'under_offer': '#f39c12',
+  'completed': '#27ae60',
+  'dead': '#95a5a6'
+} %}
+
+<div class="pipeline-grid">
+  {% for status, deals in deals_by_status.items() %}
+  <div class="pipeline-col">
+    <div class="pipeline-col-header" style="border-bottom-color: {{ status_colours.get(status,'#ccc') }}">
+      <span style="color:{{ status_colours.get(status,'#ccc') }}">{{ status.replace('_',' ').title() }}</span>
+      <span style="background:{{ status_colours.get(status,'#ccc') }};color:#fff;
+                   border-radius:10px;padding:1px 7px;font-size:0.7rem">{{ deals|length }}</span>
+    </div>
+
+    {% for deal in deals %}
+    <div class="pipeline-card">
+      <div class="price">
+        {% if deal.purchase_price %}£{{ "{:,}".format(deal.purchase_price) }}{% else %}—{% endif %}
+      </div>
+      <div class="address">{{ (deal.address or '—')[:35] }}</div>
+      {% if deal.bmv_percent %}
+      <div class="bmv">{{ "%.1f"|format(deal.bmv_percent) }}% BMV</div>
+      {% endif %}
+      {% if deal.gross_yield %}
+      <div style="color:var(--muted);font-size:0.75rem">{{ "%.1f"|format(deal.gross_yield) }}% yield</div>
+      {% endif %}
+      {% if deal.pass_fail %}
+      <span class="badge {{ 'badge-green' if deal.pass_fail == 'PASS' else 'badge-red' }}" style="margin-top:4px">
+        {{ deal.pass_fail[:10] }}
+      </span>
+      {% endif %}
+
+      <!-- Move deal form -->
+      <form method="post" action="/deals/{{ deal.id }}/status" style="margin-top:8px">
+        <select name="status" style="font-size:0.75rem;padding:3px 6px;width:100%">
+          {% for s in ['found','analysed','sent','under_offer','completed','dead'] %}
+            {% if s != status %}
+            <option value="{{ s }}">→ {{ s.replace('_',' ').title() }}</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-primary btn-sm" style="margin-top:4px;width:100%">
+          Move
+        </button>
+      </form>
+    </div>
+    {% else %}
+    <p style="color:var(--muted);font-size:0.8rem;text-align:center;padding:20px 0">Empty</p>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+
+<div style="margin-top:16px;font-size:0.82rem;color:var(--muted)">
+  To add a deal: run <code style="background:#f4f6f9;padding:2px 6px;border-radius:4px">python -m crm.cli deals analyse</code>
+</div>
+
+{% endblock %}

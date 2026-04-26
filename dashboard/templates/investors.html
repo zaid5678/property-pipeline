@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Investors — Property Pipeline{% endblock %}
+{% block content %}
+
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start">
+  <div>
+    <h2>Investors</h2>
+    <p>Your investor database and CRM</p>
+  </div>
+  <a href="{{ url_for('add_investor') }}" class="btn btn-success">+ Add Investor</a>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Phone</th>
+          <th>Strategy</th>
+          <th>Budget</th>
+          <th>Areas</th>
+          <th>Status</th>
+          <th>Follow-up</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in investors %}
+        <tr>
+          <td style="color:var(--muted)">{{ inv.id }}</td>
+          <td style="font-weight:600">{{ inv.name }}</td>
+          <td><a href="mailto:{{ inv.email }}" style="color:var(--navy)">{{ inv.email }}</a></td>
+          <td>{{ inv.phone or '—' }}</td>
+          <td>
+            <span class="badge badge-blue">{{ inv.strategy or '—' }}</span>
+          </td>
+          <td>
+            {% if inv.max_budget %}
+              £{{ "{:,}".format(inv.max_budget) }}
+            {% else %}
+              <span style="color:var(--muted)">No limit</span>
+            {% endif %}
+          </td>
+          <td style="font-size:0.82rem">
+            {% if inv.areas %}
+              {{ inv.areas | join(', ') }}
+            {% else %}
+              <span style="color:var(--muted)">Any</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge {{ 'badge-green' if inv.active else 'badge-gray' }}">
+              {{ 'Active' if inv.active else 'Inactive' }}
+            </span>
+          </td>
+          <td>
+            {% if inv.id in follow_up_ids %}
+            <span class="badge badge-amber" style="background:#fef9e7;color:#a04000">⚠️ Due</span>
+            {% else %}
+            <span style="color:var(--muted);font-size:0.8rem">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" style="text-align:center;color:var(--muted);padding:40px">
+          No investors yet. <a href="{{ url_for('add_investor') }}">Add your first investor →</a>
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if follow_up_ids %}
+<div style="margin-top:16px;background:#fef9e7;border:1px solid #f39c12;border-radius:8px;padding:12px;font-size:0.875rem">
+  ⚠️ <strong>{{ follow_up_ids|length }} investor(s) need following up</strong> — they haven't responded to a deal email in 48 hours.
+  Run <code style="background:#fff;padding:1px 5px;border-radius:3px">python -m crm.cli follow-up</code> for details.
+</div>
+{% endif %}
+
+{% endblock %}

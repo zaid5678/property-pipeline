@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Add Investor — Property Pipeline{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <h2>Add Investor</h2>
+  <p>Add a new investor to your CRM</p>
+</div>
+
+<div class="card" style="max-width:560px">
+  <form method="post" action="{{ url_for('add_investor') }}">
+    <div class="form-group">
+      <label>Full Name *</label>
+      <input type="text" name="name" required placeholder="John Smith">
+    </div>
+    <div class="form-group">
+      <label>Email Address *</label>
+      <input type="email" name="email" required placeholder="john@example.com">
+    </div>
+    <div class="form-group">
+      <label>Phone Number</label>
+      <input type="text" name="phone" placeholder="07700 900000">
+    </div>
+    <div class="form-group">
+      <label>Strategy</label>
+      <select name="strategy">
+        <option value="BTL">Buy-to-Let (BTL)</option>
+        <option value="HMO">HMO</option>
+        <option value="SA">Serviced Accommodation (SA)</option>
+        <option value="FLIP">Flip / Refurb</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Preferred Areas <small style="color:var(--muted)">(comma-separated, leave blank for any)</small></label>
+      <input type="text" name="areas" placeholder="Birmingham, Leeds, Manchester">
+    </div>
+    <div class="form-group">
+      <label>Max Budget (£) <small style="color:var(--muted)">(0 = no limit)</small></label>
+      <input type="number" name="max_budget" value="0" min="0">
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea name="notes" rows="3" placeholder="e.g. Prefers 2–3 bed terraced houses..."></textarea>
+    </div>
+    <button type="submit" class="btn btn-success">Add Investor</button>
+    <a href="{{ url_for('investors') }}" class="btn" style="background:#eee;color:#333;margin-left:8px">Cancel</a>
+  </form>
+</div>
+
+{% endblock %}
