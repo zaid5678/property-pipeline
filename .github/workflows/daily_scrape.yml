@@ -1,0 +1,58 @@
+name: Daily Property Scrape
+
+on:
+  schedule:
+    # 7:00 UTC = 8:00 BST (summer) / 7:00 GMT (winter)
+    # GitHub Actions cron is always UTC — closest we can get to 8am UK year-round
+    - cron: "0 7 * * *"
+  workflow_dispatch:  # allows manual trigger from the GitHub Actions tab
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Restore the SQLite database from the previous run so deduplication works.
+      # Without this, every run would treat all listings as new and spam your inbox.
+      - name: Restore database cache
+        uses: actions/cache@v4
+        with:
+          path: data/pipeline.db
+          key: pipeline-db-${{ github.run_id }}
+          restore-keys: pipeline-db-
+
+      - name: Create data directory
+        run: mkdir -p data output
+
+      - name: Run scraper
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+        run: python main.py --once
+
+      - name: Upload log as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-log-${{ github.run_id }}
+          path: pipeline.log
+          retention-days: 7
