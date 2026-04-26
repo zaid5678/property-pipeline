@@ -21,6 +21,7 @@ scraper:
   # If set, this takes priority over interval_minutes.
   # Set to "" or remove to use interval_minutes instead.
   run_at: "08:00"
+  timezone: "Europe/London"   # handles GMT/BST automatically
 
   # Interval in minutes between scrape runs (used only if run_at is not set)
   interval_minutes: 60

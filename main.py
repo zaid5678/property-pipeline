@@ -13,7 +13,8 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import schedule
 import time
@@ -83,6 +84,17 @@ def run_scrape_cycle(config: dict) -> None:
     logger.info("[Main] Scrape cycle complete.\n")
 
 
+def _seconds_until(target_time: str, tz_name: str) -> float:
+    """Return seconds until the next occurrence of target_time in the given timezone."""
+    tz = ZoneInfo(tz_name)
+    hour, minute = map(int, target_time.split(":"))
+    now = datetime.now(tz)
+    next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if next_run <= now:
+        next_run += timedelta(days=1)
+    return (next_run - now).total_seconds()
+
+
 def start_scheduler(config: dict) -> None:
     logger.info("Target areas: %s", ", ".join(config["scraper"]["target_areas"]))
     logger.info(
@@ -92,39 +104,45 @@ def start_scheduler(config: dict) -> None:
     )
 
     run_at = config["scraper"].get("run_at", "").strip()
+    tz_name = config["scraper"].get("timezone", "Europe/London")
 
     if run_at:
-        # Daily fixed-time mode
         try:
-            # Validate the time string
             datetime.strptime(run_at, "%H:%M")
-        except ValueError:
-            logger.error(
-                "Invalid run_at time '%s' in config.yaml — use HH:MM format (e.g. 08:00). "
-                "Falling back to interval mode.", run_at
-            )
+            ZoneInfo(tz_name)  # validate timezone
+        except (ValueError, KeyError) as exc:
+            logger.error("Bad run_at/timezone config (%s) — falling back to interval mode.", exc)
             run_at = ""
 
     if run_at:
-        logger.info("Scheduler starting — will scrape daily at %s", run_at)
-        schedule.every().day.at(run_at).do(run_scrape_cycle, config=config)
-        logger.info(
-            "Next run scheduled for %s. Press Ctrl+C to stop.",
-            schedule.next_run().strftime("%Y-%m-%d %H:%M:%S"),
-        )
+        # Timezone-aware daily scheduler.
+        # We compute the exact sleep duration each iteration so BST/GMT transitions
+        # are handled automatically — no drift, no missed days.
+        logger.info("Scheduler starting — daily at %s %s", run_at, tz_name)
+        try:
+            while True:
+                secs = _seconds_until(run_at, tz_name)
+                next_dt = datetime.now(ZoneInfo(tz_name)) + timedelta(seconds=secs)
+                logger.info(
+                    "Next run in %dh %dm — %s %s. Press Ctrl+C to stop.",
+                    int(secs // 3600), int((secs % 3600) // 60),
+                    next_dt.strftime("%Y-%m-%d %H:%M"), tz_name,
+                )
+                time.sleep(secs)
+                run_scrape_cycle(config)
+        except KeyboardInterrupt:
+            logger.info("Scheduler stopped by user.")
     else:
         interval = config["scraper"].get("interval_minutes", 60)
-        logger.info("Scheduler starting — will scrape every %d minutes", interval)
-        # Run once immediately on startup when using interval mode
+        logger.info("Scheduler starting — every %d minutes", interval)
         run_scrape_cycle(config)
         schedule.every(interval).minutes.do(run_scrape_cycle, config=config)
-
-    try:
-        while True:
-            schedule.run_pending()
-            time.sleep(30)
-    except KeyboardInterrupt:
-        logger.info("Scheduler stopped by user.")
+        try:
+            while True:
+                schedule.run_pending()
+                time.sleep(30)
+        except KeyboardInterrupt:
+            logger.info("Scheduler stopped by user.")
 
 
 def main():
