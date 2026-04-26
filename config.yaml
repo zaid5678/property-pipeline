@@ -17,7 +17,12 @@ scraper:
     min: 50000
     max: 250000
 
-  # Interval in minutes between scrape runs
+  # Run at a specific time each day (24-hour format, e.g. "08:00")
+  # If set, this takes priority over interval_minutes.
+  # Set to "" or remove to use interval_minutes instead.
+  run_at: "08:00"
+
+  # Interval in minutes between scrape runs (used only if run_at is not set)
   interval_minutes: 60
 
   # Seconds to wait between HTTP requests (be polite to servers)

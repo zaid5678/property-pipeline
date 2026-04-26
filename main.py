@@ -84,8 +84,6 @@ def run_scrape_cycle(config: dict) -> None:
 
 
 def start_scheduler(config: dict) -> None:
-    interval = config["scraper"].get("interval_minutes", 60)
-    logger.info("Scheduler starting — will scrape every %d minutes", interval)
     logger.info("Target areas: %s", ", ".join(config["scraper"]["target_areas"]))
     logger.info(
         "Price range: £%s – £%s",
@@ -93,13 +91,34 @@ def start_scheduler(config: dict) -> None:
         f"{config['scraper']['price']['max']:,}",
     )
 
-    # Run once immediately on startup
-    run_scrape_cycle(config)
+    run_at = config["scraper"].get("run_at", "").strip()
 
-    # Schedule recurring runs
-    schedule.every(interval).minutes.do(run_scrape_cycle, config=config)
+    if run_at:
+        # Daily fixed-time mode
+        try:
+            # Validate the time string
+            datetime.strptime(run_at, "%H:%M")
+        except ValueError:
+            logger.error(
+                "Invalid run_at time '%s' in config.yaml — use HH:MM format (e.g. 08:00). "
+                "Falling back to interval mode.", run_at
+            )
+            run_at = ""
 
-    logger.info("Scheduler running. Press Ctrl+C to stop.")
+    if run_at:
+        logger.info("Scheduler starting — will scrape daily at %s", run_at)
+        schedule.every().day.at(run_at).do(run_scrape_cycle, config=config)
+        logger.info(
+            "Next run scheduled for %s. Press Ctrl+C to stop.",
+            schedule.next_run().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+    else:
+        interval = config["scraper"].get("interval_minutes", 60)
+        logger.info("Scheduler starting — will scrape every %d minutes", interval)
+        # Run once immediately on startup when using interval mode
+        run_scrape_cycle(config)
+        schedule.every(interval).minutes.do(run_scrape_cycle, config=config)
+
     try:
         while True:
             schedule.run_pending()
