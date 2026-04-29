@@ -1,25 +1,24 @@
 """
-Rightmove — reduced price for sale listings scraper.
+Rightmove — for sale listings scraper.
 
-Searches Rightmove for properties with "reduced" in the description/badge,
-within target areas and price range.  Rightmove is server-side rendered for
-most listing data, so BeautifulSoup works for the key fields.
+Parses the window.jsonModel JSON blob embedded in search result pages.
+Works from cloud IPs with proper headers.
 """
 
 import json
 import logging
 import re
+import time
+import random
 from urllib.parse import quote_plus
 
-from scraper.base import fetch, url_hash, now_iso
+from scraper.base import fetch, url_hash, now_iso, SESSION
 from db.models import get_conn
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.rightmove.co.uk"
 
-# Rightmove location identifiers must be looked up.  We use their
-# autocomplete endpoint to resolve a town name to a region/outcode ID.
 AUTOCOMPLETE_URL = (
     "https://www.rightmove.co.uk/typeAhead/uknoauth?"
     "input={query}&rent=false&sale=true"
@@ -27,176 +26,185 @@ AUTOCOMPLETE_URL = (
 
 
 def _resolve_location_id(area: str, delay: float) -> str | None:
-    """Use Rightmove's typeahead API to get a locationIdentifier for a town."""
-    import requests
-    from scraper.base import SESSION
-    import time, random
-
-    time.sleep(delay + random.uniform(0.3, 1.0))
+    time.sleep(delay + random.uniform(0.3, 0.8))
     url = AUTOCOMPLETE_URL.format(query=quote_plus(area))
     try:
-        resp = SESSION.get(url, timeout=10)
+        resp = SESSION.get(url, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        # First result is usually the best match
         results = data.get("typeAheadLocations", [])
         if results:
             loc_id = results[0].get("locationIdentifier", "")
-            logger.debug("[Rightmove] Resolved '%s' → %s", area, loc_id)
+            logger.info("[Rightmove] Resolved '%s' → %s", area, loc_id)
             return loc_id
+        logger.warning("[Rightmove] No location results for '%s'. Response: %s", area, str(data)[:200])
     except Exception as exc:
         logger.warning("[Rightmove] Location lookup failed for '%s': %s", area, exc)
     return None
 
 
 def _build_search_url(location_id: str, min_price: int, max_price: int, index: int = 0) -> str:
+    # Note: no mustHave=priceReduced — that parameter doesn't exist on Rightmove.
+    # We scrape all listings in the price range; the price range itself targets
+    # below-market properties.
     return (
         f"{BASE_URL}/property-for-sale/find.html"
         f"?locationIdentifier={quote_plus(location_id)}"
         f"&minPrice={min_price}"
         f"&maxPrice={max_price}"
-        f"&mustHave=priceReduced"
         f"&index={index}"
-        f"&_includeSSTC=false"
+        f"&includeSSTC=false"
+        f"&sortType=6"  # sort by newest first
     )
 
 
-def _parse_price(text: str) -> int | None:
-    digits = re.sub(r"[^\d]", "", text)
-    return int(digits) if digits else None
+def _parse_price(val) -> int | None:
+    try:
+        return int(re.sub(r"[^\d]", "", str(val)))
+    except (ValueError, TypeError):
+        return None
 
 
-def _scrape_page(soup, area: str) -> list[dict]:
-    listings = []
-
-    # Rightmove embeds property data in a JSON blob: window.jsonModel
-    script_tags = soup.find_all("script")
-    json_model = None
-    for tag in script_tags:
+def _extract_json_model(soup) -> list[dict]:
+    """Extract property list from Rightmove's embedded window.jsonModel."""
+    for tag in soup.find_all("script"):
         text = tag.string or ""
-        if "jsonModel" in text:
-            match = re.search(r"window\.jsonModel\s*=\s*(\{.*?\});", text, re.DOTALL)
+        if "jsonModel" not in text:
+            continue
+        match = re.search(r"window\.jsonModel\s*=\s*(\{.+?\})\s*;?\s*\n", text, re.DOTALL)
+        if not match:
+            # Try a more lenient pattern
+            match = re.search(r"window\.jsonModel\s*=\s*(\{.*)", text, re.DOTALL)
             if match:
-                try:
-                    json_model = json.loads(match.group(1))
-                    break
-                except json.JSONDecodeError:
-                    pass
+                # Trim to find the end of the object
+                raw = match.group(1)
+                # Find balanced braces
+                depth, end = 0, 0
+                for i, ch in enumerate(raw):
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                raw = raw[:end]
+            else:
+                continue
+        else:
+            raw = match.group(1)
 
-    if json_model:
-        properties = json_model.get("properties", [])
-        for prop in properties:
-            try:
-                price_info = prop.get("price", {})
-                listing = {
-                    "source": "rightmove",
-                    "title": prop.get("summary", prop.get("displayAddress", "")),
-                    "price": _parse_price(str(price_info.get("amount", ""))),
-                    "location": prop.get("displayAddress", area),
-                    "description": prop.get("summary", ""),
-                    "phone": None,
-                    "posted_date": prop.get("firstVisibleDate"),
-                    "url": BASE_URL + prop.get("propertyUrl", ""),
-                }
-                listings.append(listing)
-            except Exception as exc:
-                logger.debug("JSON prop parse error: %s", exc)
-        return listings
+        try:
+            model = json.loads(raw)
+            props = model.get("properties", [])
+            logger.info("[Rightmove] jsonModel found with %d properties", len(props))
+            return props
+        except json.JSONDecodeError as exc:
+            logger.debug("[Rightmove] JSON parse error: %s", exc)
+    return []
 
-    # Fallback: parse HTML cards
-    cards = soup.select("div.l-searchResult, [data-test='propertyCard']")
+
+def _parse_html_cards(soup, area: str) -> list[dict]:
+    """Fallback: parse HTML property cards."""
+    listings = []
+    cards = soup.select(
+        "div.l-searchResult, [data-test='propertyCard'], "
+        ".propertyCard, div[class*='propertyCard']"
+    )
+    logger.info("[Rightmove] HTML fallback found %d cards", len(cards))
     for card in cards:
         try:
-            listing = _parse_html_card(card, area)
-            if listing:
-                listings.append(listing)
-        except Exception as exc:
-            logger.debug("HTML card parse error: %s", exc)
+            link = card.select_one("a[href*='/properties/']")
+            if not link:
+                continue
+            href = link.get("href", "")
+            url = BASE_URL + href if href.startswith("/") else href
 
+            price_el = card.select_one(
+                ".propertyCard-priceValue, [data-test='property-price'], "
+                "[class*='price']"
+            )
+            addr_el = card.select_one(
+                "address, .propertyCard-address, [data-test='address']"
+            )
+            desc_el = card.select_one(".propertyCard-description, [class*='description']")
+            date_el = card.select_one(
+                ".propertyCard-branchSummary-addedOrReduced, [class*='added']"
+            )
+
+            listings.append({
+                "source": "rightmove",
+                "title": addr_el.get_text(strip=True) if addr_el else area,
+                "price": _parse_price(price_el.get_text()) if price_el else None,
+                "location": addr_el.get_text(strip=True) if addr_el else area,
+                "description": desc_el.get_text(strip=True)[:500] if desc_el else "",
+                "phone": None,
+                "posted_date": date_el.get_text(strip=True) if date_el else None,
+                "url": url,
+            })
+        except Exception as exc:
+            logger.debug("[Rightmove] Card parse error: %s", exc)
     return listings
 
 
-def _parse_html_card(card, area: str) -> dict | None:
-    title_el = card.select_one("h2.propertyCard-title, [data-test='property-header']")
-    price_el = card.select_one(".propertyCard-priceValue, [data-test='property-price']")
-    addr_el = card.select_one("address.propertyCard-address")
-    link_el = card.select_one("a.propertyCard-link, a[data-test='property-details']")
-    desc_el = card.select_one(".propertyCard-description")
-    date_el = card.select_one(".propertyCard-branchSummary-addedOrReduced")
-
-    if not link_el:
-        return None
-
-    href = link_el.get("href", "")
-    url = BASE_URL + href if href.startswith("/") else href
-
-    return {
-        "source": "rightmove",
-        "title": title_el.get_text(strip=True) if title_el else "",
-        "price": _parse_price(price_el.get_text()) if price_el else None,
-        "location": addr_el.get_text(strip=True) if addr_el else area,
-        "description": desc_el.get_text(strip=True)[:500] if desc_el else "",
-        "phone": None,
-        "posted_date": date_el.get_text(strip=True) if date_el else None,
-        "url": url,
-    }
-
-
 def scrape_area(area: str, min_price: int, max_price: int, delay: float = 3.0) -> list[dict]:
-    """Scrape Rightmove reduced listings for one area."""
     new_listings = []
     conn = get_conn()
 
     location_id = _resolve_location_id(area, delay)
     if not location_id:
-        logger.warning("[Rightmove] Could not resolve location for '%s', skipping.", area)
         conn.close()
         return []
 
-    for page_idx in [0, 24, 48]:  # pages 1–3 (24 results per page)
+    for page_idx in [0, 24, 48]:
         url = _build_search_url(location_id, min_price, max_price, page_idx)
-        logger.info("[Rightmove] Scraping %s (index %d)", area, page_idx)
+        logger.info("[Rightmove] Fetching %s", url)
         soup = fetch(url, delay=delay)
         if not soup:
             break
 
-        page_listings = _scrape_page(soup, area)
+        # Diagnostic: log first 300 chars of page to catch blocks/redirects
+        page_text = str(soup)[:300]
+        logger.debug("[Rightmove] Page snippet: %s", page_text)
+
+        # Try JSON model first, then HTML fallback
+        raw_props = _extract_json_model(soup)
+        if raw_props:
+            page_listings = _props_from_json(raw_props, area)
+        else:
+            logger.info("[Rightmove] No jsonModel, trying HTML cards")
+            page_listings = _parse_html_cards(soup, area)
+
         if not page_listings:
+            logger.info("[Rightmove] No listings on page index %d for %s", page_idx, area)
             break
 
         for listing in page_listings:
             if not listing.get("url"):
                 continue
-
             price = listing.get("price")
             if price and (price < min_price or price > max_price):
                 continue
 
             h = url_hash(listing["url"])
-            existing = conn.execute(
-                "SELECT id FROM properties WHERE url_hash = ?", (h,)
-            ).fetchone()
-            if existing:
+            if conn.execute("SELECT id FROM properties WHERE url_hash=?", (h,)).fetchone():
                 continue
 
-            listing["url_hash"] = h
-            listing["scraped_at"] = now_iso()
-
+            listing.update({"url_hash": h, "scraped_at": now_iso(), "source": "rightmove"})
             try:
                 conn.execute(
                     """INSERT INTO properties
-                       (source, title, price, location, description, phone, url,
-                        posted_date, scraped_at, url_hash)
-                       VALUES (:source, :title, :price, :location, :description,
-                               :phone, :url, :posted_date, :scraped_at, :url_hash)""",
+                       (source,title,price,location,description,phone,url,
+                        posted_date,scraped_at,url_hash)
+                       VALUES (:source,:title,:price,:location,:description,:phone,
+                               :url,:posted_date,:scraped_at,:url_hash)""",
                     {k: listing.get(k) for k in
-                     ["source", "title", "price", "location", "description",
-                      "phone", "url", "posted_date", "scraped_at", "url_hash"]}
+                     ["source","title","price","location","description","phone",
+                      "url","posted_date","scraped_at","url_hash"]}
                 )
                 conn.commit()
                 new_listings.append(listing)
-                logger.info("[Rightmove] NEW listing: %s — £%s",
-                            listing.get("title"), listing.get("price"))
+                logger.info("[Rightmove] NEW: %s — £%s", listing.get("title"), listing.get("price"))
             except Exception as exc:
                 logger.debug("DB insert error: %s", exc)
 
@@ -204,8 +212,29 @@ def scrape_area(area: str, min_price: int, max_price: int, delay: float = 3.0) -
     return new_listings
 
 
+def _props_from_json(props: list, area: str) -> list[dict]:
+    listings = []
+    for prop in props:
+        try:
+            price_info = prop.get("price", {})
+            amount = price_info.get("amount") or price_info.get("displayPrices", [{}])[0].get("displayPrice", "")
+            href = prop.get("propertyUrl", "")
+            listings.append({
+                "source": "rightmove",
+                "title": prop.get("displayAddress") or prop.get("summary", area),
+                "price": _parse_price(amount),
+                "location": prop.get("displayAddress", area),
+                "description": prop.get("summary", ""),
+                "phone": None,
+                "posted_date": prop.get("firstVisibleDate") or prop.get("addedOrReduced"),
+                "url": BASE_URL + href if href.startswith("/") else href,
+            })
+        except Exception as exc:
+            logger.debug("[Rightmove] JSON prop parse error: %s", exc)
+    return listings
+
+
 def run_scraper(config: dict) -> list[dict]:
-    """Entry point called by the scheduler."""
     all_new = []
     areas = config["scraper"]["target_areas"]
     min_p = config["scraper"]["price"]["min"]
@@ -214,10 +243,9 @@ def run_scraper(config: dict) -> list[dict]:
 
     for area in areas:
         try:
-            new = scrape_area(area, min_p, max_p, delay)
-            all_new.extend(new)
+            all_new.extend(scrape_area(area, min_p, max_p, delay))
         except Exception as exc:
             logger.error("[Rightmove] Error scraping %s: %s", area, exc)
 
-    logger.info("[Rightmove] Run complete. %d new listings found.", len(all_new))
+    logger.info("[Rightmove] Done. %d new listings.", len(all_new))
     return all_new

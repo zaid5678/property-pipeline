@@ -37,6 +37,7 @@ logger = logging.getLogger("main")
 from db.models import init_db
 from scraper.gumtree import run_scraper as gumtree_scraper
 from scraper.rightmove import run_scraper as rightmove_scraper
+from scraper.onthemarket import run_scraper as otm_scraper
 from alerts.emailer import send_batch_alerts, send_daily_summary
 
 
@@ -55,23 +56,33 @@ def run_scrape_cycle(config: dict) -> None:
     all_new = []
     errors = []
 
-    # Gumtree
+    # OnTheMarket — primary source, works on cloud runners
     try:
-        new_gumtree = gumtree_scraper(config)
-        all_new.extend(new_gumtree)
-        logger.info("[Main] Gumtree: %d new listings", len(new_gumtree))
+        new_otm = otm_scraper(config)
+        all_new.extend(new_otm)
+        logger.info("[Main] OnTheMarket: %d new listings", len(new_otm))
     except Exception as exc:
-        msg = f"Gumtree scraper failed: {exc}"
+        msg = f"OnTheMarket scraper failed: {exc}"
         logger.error("[Main] %s", msg)
         errors.append(msg)
 
-    # Rightmove reduced
+    # Rightmove
     try:
         new_rightmove = rightmove_scraper(config)
         all_new.extend(new_rightmove)
         logger.info("[Main] Rightmove: %d new listings", len(new_rightmove))
     except Exception as exc:
         msg = f"Rightmove scraper failed: {exc}"
+        logger.error("[Main] %s", msg)
+        errors.append(msg)
+
+    # Gumtree — only works from residential IPs (blocked by Cloudflare on cloud)
+    try:
+        new_gumtree = gumtree_scraper(config)
+        all_new.extend(new_gumtree)
+        logger.info("[Main] Gumtree: %d new listings", len(new_gumtree))
+    except Exception as exc:
+        msg = f"Gumtree scraper failed: {exc}"
         logger.error("[Main] %s", msg)
         errors.append(msg)
 

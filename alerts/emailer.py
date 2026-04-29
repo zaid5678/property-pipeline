@@ -171,6 +171,7 @@ def send_daily_summary(
     count = len(new_listings)
     gumtree_count = sum(1 for l in new_listings if l.get("source") == "gumtree")
     rightmove_count = sum(1 for l in new_listings if l.get("source") == "rightmove")
+    otm_count = sum(1 for l in new_listings if l.get("source") == "onthemarket")
     status_colour = "#27ae60" if count > 0 else "#7f8c8d"
     status_text = f"{count} new listing{'s' if count != 1 else ''} found" if count > 0 else "No new listings found"
     timestamp = datetime.now().strftime("%d %B %Y, %H:%M UTC")
@@ -204,7 +205,7 @@ def send_daily_summary(
                 border-left:4px solid {status_colour}">
       <span style="font-size:1.4em;font-weight:700;color:{status_colour}">{status_text}</span>
       <div style="margin-top:6px;color:#555;font-size:0.9em">
-        Gumtree: {gumtree_count} &nbsp;|&nbsp; Rightmove: {rightmove_count}
+        OnTheMarket: {otm_count} &nbsp;|&nbsp; Rightmove: {rightmove_count} &nbsp;|&nbsp; Gumtree: {gumtree_count}
       </div>
     </div>
 
@@ -219,7 +220,7 @@ def send_daily_summary(
 </body></html>"""
 
     subject = f"Property Pipeline: {status_text} — {timestamp}"
-    text = f"Property Pipeline Daily Report\n{timestamp}\n\n{status_text}\nGumtree: {gumtree_count} | Rightmove: {rightmove_count}\n"
+    text = f"Property Pipeline Daily Report\n{timestamp}\n\n{status_text}\nOnTheMarket: {otm_count} | Rightmove: {rightmove_count} | Gumtree: {gumtree_count}\n"
     for l in new_listings:
         price = f"£{l['price']:,}" if l.get("price") else "POA"
         text += f"\n- {l.get('title','—')} | {price} | {l.get('location','—')} | {l.get('url','')}"
