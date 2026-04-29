@@ -37,7 +37,7 @@ logger = logging.getLogger("main")
 from db.models import init_db
 from scraper.gumtree import run_scraper as gumtree_scraper
 from scraper.rightmove import run_scraper as rightmove_scraper
-from alerts.emailer import send_batch_alerts
+from alerts.emailer import send_batch_alerts, send_daily_summary
 
 
 def load_config() -> dict:
@@ -53,6 +53,7 @@ def run_scrape_cycle(config: dict) -> None:
     logger.info("=" * 60)
 
     all_new = []
+    errors = []
 
     # Gumtree
     try:
@@ -60,7 +61,9 @@ def run_scrape_cycle(config: dict) -> None:
         all_new.extend(new_gumtree)
         logger.info("[Main] Gumtree: %d new listings", len(new_gumtree))
     except Exception as exc:
-        logger.error("[Main] Gumtree scraper failed: %s", exc)
+        msg = f"Gumtree scraper failed: {exc}"
+        logger.error("[Main] %s", msg)
+        errors.append(msg)
 
     # Rightmove reduced
     try:
@@ -68,18 +71,24 @@ def run_scrape_cycle(config: dict) -> None:
         all_new.extend(new_rightmove)
         logger.info("[Main] Rightmove: %d new listings", len(new_rightmove))
     except Exception as exc:
-        logger.error("[Main] Rightmove scraper failed: %s", exc)
+        msg = f"Rightmove scraper failed: {exc}"
+        logger.error("[Main] %s", msg)
+        errors.append(msg)
 
     logger.info("[Main] Total new listings this cycle: %d", len(all_new))
 
-    # Send alerts
-    if all_new and config.get("alerts", {}).get("email_enabled", True):
-        alert_email = os.environ.get("ALERT_EMAIL", "")
-        if not alert_email:
-            logger.warning("[Main] ALERT_EMAIL not set — skipping email alerts")
-        else:
+    alert_email = os.environ.get("ALERT_EMAIL", "")
+    if not alert_email:
+        logger.warning("[Main] ALERT_EMAIL not set — skipping all emails")
+    elif config.get("alerts", {}).get("email_enabled", True):
+        # Send individual alerts for each new listing
+        if all_new:
             sent = send_batch_alerts(all_new, alert_email)
-            logger.info("[Main] Sent %d alert emails to %s", sent, alert_email)
+            logger.info("[Main] Sent %d individual listing alerts to %s", sent, alert_email)
+
+        # Always send daily summary so you know the scraper ran
+        ok = send_daily_summary(all_new, errors, alert_email)
+        logger.info("[Main] Daily summary email %s", "sent" if ok else "FAILED")
 
     logger.info("[Main] Scrape cycle complete.\n")
 

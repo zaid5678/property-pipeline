@@ -158,6 +158,75 @@ def send_batch_alerts(listings: list[dict], alert_email: str) -> int:
     return sent
 
 
+def send_daily_summary(
+    new_listings: list[dict],
+    errors: list[str],
+    alert_email: str,
+) -> bool:
+    """
+    Send a daily run summary — always fires so you know the scraper ran,
+    even when no new listings were found.
+    """
+    from datetime import datetime
+    count = len(new_listings)
+    gumtree_count = sum(1 for l in new_listings if l.get("source") == "gumtree")
+    rightmove_count = sum(1 for l in new_listings if l.get("source") == "rightmove")
+    status_colour = "#27ae60" if count > 0 else "#7f8c8d"
+    status_text = f"{count} new listing{'s' if count != 1 else ''} found" if count > 0 else "No new listings found"
+    timestamp = datetime.now().strftime("%d %B %Y, %H:%M UTC")
+
+    rows_html = ""
+    for l in new_listings[:20]:  # cap at 20 in summary
+        price = f"£{l['price']:,}" if l.get("price") else "POA"
+        phone = l.get("phone") or "—"
+        rows_html += f"""
+        <tr>
+          <td style="padding:7px 10px">{l.get('source','').capitalize()}</td>
+          <td style="padding:7px 10px"><a href="{l.get('url','#')}" style="color:#1a3a5c">{l.get('title','—')[:60]}</a></td>
+          <td style="padding:7px 10px;font-weight:bold">{price}</td>
+          <td style="padding:7px 10px">{l.get('location','—')}</td>
+          <td style="padding:7px 10px;color:#e74c3c;font-weight:bold">{phone}</td>
+        </tr>"""
+
+    errors_html = ""
+    if errors:
+        errors_html = "<h3 style='color:#e74c3c'>Errors</h3><ul>" + \
+                      "".join(f"<li>{e}</li>" for e in errors) + "</ul>"
+
+    html = f"""
+<html><body style="font-family:Arial,sans-serif;max-width:680px;margin:auto">
+  <div style="background:#1a3a5c;padding:20px;border-radius:8px 8px 0 0">
+    <h2 style="color:#fff;margin:0">Property Pipeline — Daily Report</h2>
+    <p style="color:#aac4e4;margin:4px 0 0">{timestamp}</p>
+  </div>
+  <div style="border:1px solid #ddd;border-top:none;padding:20px;border-radius:0 0 8px 8px">
+    <div style="background:#f4f8ff;border-radius:8px;padding:16px;margin-bottom:16px;
+                border-left:4px solid {status_colour}">
+      <span style="font-size:1.4em;font-weight:700;color:{status_colour}">{status_text}</span>
+      <div style="margin-top:6px;color:#555;font-size:0.9em">
+        Gumtree: {gumtree_count} &nbsp;|&nbsp; Rightmove: {rightmove_count}
+      </div>
+    </div>
+
+    {'<table style="width:100%;border-collapse:collapse;font-size:0.875em"><thead><tr style="background:#1a3a5c;color:#fff"><th style="padding:8px 10px;text-align:left">Source</th><th style="padding:8px 10px;text-align:left">Title</th><th style="padding:8px 10px;text-align:left">Price</th><th style="padding:8px 10px;text-align:left">Location</th><th style="padding:8px 10px;text-align:left">Phone</th></tr></thead><tbody>' + rows_html + '</tbody></table>' if new_listings else '<p style="color:#7f8c8d">Nothing new today — check back tomorrow.</p>'}
+
+    {errors_html}
+
+    <p style="color:#aaa;font-size:0.8em;margin-top:20px">
+      Property Pipeline — automated daily report
+    </p>
+  </div>
+</body></html>"""
+
+    subject = f"Property Pipeline: {status_text} — {timestamp}"
+    text = f"Property Pipeline Daily Report\n{timestamp}\n\n{status_text}\nGumtree: {gumtree_count} | Rightmove: {rightmove_count}\n"
+    for l in new_listings:
+        price = f"£{l['price']:,}" if l.get("price") else "POA"
+        text += f"\n- {l.get('title','—')} | {price} | {l.get('location','—')} | {l.get('url','')}"
+
+    return _send(to=alert_email, subject=subject, html_body=html, text_body=text)
+
+
 # ---------------------------------------------------------------------------
 # Investor deal blast emails
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ scraper:
   # Run at a specific time each day (24-hour format, e.g. "08:00")
   # If set, this takes priority over interval_minutes.
   # Set to "" or remove to use interval_minutes instead.
-  run_at: "08:00"
+  run_at: "00:00"
   timezone: "Europe/London"   # handles GMT/BST automatically
 
   # Interval in minutes between scrape runs (used only if run_at is not set)
