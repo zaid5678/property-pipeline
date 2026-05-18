@@ -1,9 +1,8 @@
 """
 OnTheMarket — for sale listings scraper.
 
-OnTheMarket uses Next.js and embeds all property data in a
-<script id="__NEXT_DATA__"> JSON blob on the page — no JS execution needed,
-no Cloudflare, works reliably from cloud IPs.
+Parses the 30 article elements on each search results page.
+Works reliably from cloud IPs.
 """
 
 import json
@@ -19,23 +18,19 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://www.onthemarket.com"
 
 
-def _area_slug(area: str) -> str:
-    return area.lower().strip().replace(" ", "-")
-
-
 def _build_search_url(area: str, min_price: int, max_price: int, page: int = 1) -> str:
-    slug = _area_slug(area)
+    slug = area.lower().strip().replace(" ", "-")
     params = f"min-price={min_price}&max-price={max_price}"
     if page > 1:
         params += f"&page={page}"
     return f"{BASE_URL}/for-sale/property/{slug}/?{params}"
 
 
-def _parse_price(val) -> int | None:
-    try:
-        return int(re.sub(r"[^\d]", "", str(val)))
-    except (ValueError, TypeError):
+def _parse_price(text: str) -> int | None:
+    if not text:
         return None
+    digits = re.sub(r"[^\d]", "", text)
+    return int(digits) if digits else None
 
 
 def _extract_phone(text: str) -> str | None:
@@ -45,145 +40,78 @@ def _extract_phone(text: str) -> str | None:
     return match.group(0).strip() if match else None
 
 
-def _parse_next_data(soup) -> list[dict]:
-    """Extract properties from Next.js __NEXT_DATA__ JSON blob."""
-    tag = soup.find("script", {"id": "__NEXT_DATA__"})
-    if not tag or not tag.string:
-        logger.warning("[OTM] No __NEXT_DATA__ found")
-        return []
-
-    try:
-        data = json.loads(tag.string)
-    except json.JSONDecodeError as exc:
-        logger.warning("[OTM] JSON parse error: %s", exc)
-        return []
-
-    # Properties live at different paths depending on OTM's page version
-    page_props = data.get("props", {}).get("pageProps", {})
-
-    # Try known paths
-    for key in ("properties", "listings", "results", "data"):
-        if key in page_props and isinstance(page_props[key], list):
-            logger.info("[OTM] Found %d properties under pageProps.%s", len(page_props[key]), key)
-            return page_props[key]
-
-    # Recurse one level deeper
-    for val in page_props.values():
-        if isinstance(val, dict):
-            for key in ("properties", "listings", "results"):
-                if key in val and isinstance(val[key], list):
-                    logger.info("[OTM] Found %d properties under nested key '%s'", len(val[key]), key)
-                    return val[key]
-
-    logger.warning("[OTM] Could not find property list in __NEXT_DATA__. Keys: %s",
-                   list(page_props.keys()))
-    logger.debug("[OTM] __NEXT_DATA__ snippet: %s", tag.string[:500])
-    return []
+def _find_price_in_article(article) -> int | None:
+    """Find the first £X,XXX-style price anywhere in the article."""
+    for el in article.find_all(True):
+        text = el.get_text(strip=True)
+        m = re.search(r"£([\d,]+)", text)
+        if m:
+            val = _parse_price(m.group(1))
+            if val and val > 10000:   # ignore small numbers like £300/m²
+                return val
+    return None
 
 
-def _parse_html_fallback(soup, area: str) -> list[dict]:
-    """Fallback HTML parser for OTM listing cards."""
-    listings = []
-    cards = soup.select(
-        "li[data-testid='listing-card'], "
-        "div[data-testid='listing-card'], "
-        ".property-card, article[class*='property']"
-    )
-    logger.info("[OTM] HTML fallback: %d cards found", len(cards))
-    for card in cards:
-        try:
-            link = card.select_one("a[href*='/details/']")
-            if not link:
-                continue
-            href = link.get("href", "")
-            url = BASE_URL + href if href.startswith("/") else href
-
-            price_el = card.select_one(
-                "[data-testid='price'], .price, [class*='price']"
-            )
-            addr_el = card.select_one(
-                "[data-testid='address'], address, [class*='address']"
-            )
-            desc_el = card.select_one(
-                "[data-testid='description'], [class*='description'], p"
-            )
-
-            listings.append({
-                "title": addr_el.get_text(strip=True) if addr_el else area,
-                "price": _parse_price(price_el.get_text()) if price_el else None,
-                "location": addr_el.get_text(strip=True) if addr_el else area,
-                "description": desc_el.get_text(strip=True)[:500] if desc_el else "",
-                "phone": None,
-                "posted_date": None,
-                "url": url,
-            })
-        except Exception as exc:
-            logger.debug("[OTM] Card parse error: %s", exc)
-    return listings
-
-
-def _listing_from_json(prop: dict, area: str) -> dict | None:
-    """Convert an OTM JSON property object to our standard listing dict."""
-    try:
-        # OTM uses various shapes — handle both known versions
-        price_raw = (
-            prop.get("price")
-            or prop.get("pricing", {}).get("price")
-            or prop.get("listingPriceDisplay")
-            or ""
-        )
-        address = (
-            prop.get("address")
-            or prop.get("displayAddress")
-            or prop.get("location", {}).get("address")
-            or area
-        )
-        if isinstance(address, dict):
-            address = ", ".join(filter(None, [
-                address.get("line1"), address.get("line2"),
-                address.get("town"), address.get("postcode")
-            ]))
-
-        summary = (
-            prop.get("summary")
-            or prop.get("description")
-            or prop.get("shortDescription")
-            or ""
-        )
-
-        slug = (
-            prop.get("detailUrl")
-            or prop.get("propertyUrl")
-            or prop.get("id")
-            or ""
-        )
-        if slug and not slug.startswith("http"):
-            url = BASE_URL + slug if slug.startswith("/") else f"{BASE_URL}/details/{slug}/"
-        else:
-            url = slug
-
-        if not url:
-            return None
-
-        phone_raw = (
-            prop.get("phone")
-            or prop.get("contactPhone")
-            or prop.get("agent", {}).get("phone")
-            or ""
-        )
-
-        return {
-            "title": address,
-            "price": _parse_price(price_raw),
-            "location": address,
-            "description": str(summary)[:500],
-            "phone": _extract_phone(str(phone_raw)) if phone_raw else None,
-            "posted_date": prop.get("addedOn") or prop.get("dateAdded"),
-            "url": url,
-        }
-    except Exception as exc:
-        logger.debug("[OTM] JSON prop parse error: %s", exc)
+def _parse_article(article, area: str) -> dict | None:
+    """Extract listing data from a single <article> element."""
+    # URL — must have a details link
+    link = article.find("a", href=re.compile(r"/details/\d+"))
+    if not link:
+        # Broader fallback
+        link = article.find("a", href=True)
+    if not link:
         return None
+
+    href = link.get("href", "")
+    url = BASE_URL + href if href.startswith("/") else href
+    if not url or "onthemarket.com" not in url and not href.startswith("/"):
+        return None
+
+    # Price
+    price = _find_price_in_article(article)
+
+    # Address / title — try headings first, then any prominent text element
+    address = ""
+    for tag in ["h2", "h3", "h4", "[data-testid*='address']", "[class*='address']",
+                "[class*='Address']", "[class*='title']", "[class*='Title']"]:
+        el = article.select_one(tag)
+        if el:
+            text = el.get_text(strip=True)
+            if text and len(text) > 5:
+                address = text
+                break
+
+    # If still no address, grab longest text block in the article
+    if not address:
+        candidates = [el.get_text(strip=True) for el in article.find_all(["p", "span", "div"])
+                      if 10 < len(el.get_text(strip=True)) < 120]
+        address = max(candidates, key=len, default=area)
+
+    # Description snippet — longest paragraph-like text
+    desc = ""
+    for el in article.find_all(["p", "span"]):
+        text = el.get_text(strip=True)
+        if len(text) > len(desc) and "£" not in text:
+            desc = text
+    desc = desc[:500]
+
+    # Posted date
+    posted = None
+    for el in article.find_all(True):
+        text = el.get_text(strip=True).lower()
+        if "added" in text or "reduced" in text or "listed" in text:
+            posted = el.get_text(strip=True)
+            break
+
+    return {
+        "title": address or area,
+        "price": price,
+        "location": address or area,
+        "description": desc,
+        "phone": None,
+        "posted_date": posted,
+        "url": url,
+    }
 
 
 def scrape_area(area: str, min_price: int, max_price: int, delay: float = 3.0) -> list[dict]:
@@ -192,29 +120,27 @@ def scrape_area(area: str, min_price: int, max_price: int, delay: float = 3.0) -
 
     for page in range(1, 4):
         url = _build_search_url(area, min_price, max_price, page)
-        logger.info("[OTM] Scraping %s page %d — %s", area, page, url)
+        logger.info("[OTM] Fetching %s", url)
         soup = fetch(url, delay=delay)
         if not soup:
             break
 
-        # Try __NEXT_DATA__ first
-        raw_props = _parse_next_data(soup)
-        if raw_props:
-            page_listings = [
-                l for p in raw_props
-                if (l := _listing_from_json(p, area)) is not None
-            ]
-        else:
-            page_listings = _parse_html_fallback(soup, area)
+        articles = soup.select("article")
+        logger.info("[OTM] %s page %d: %d article elements found", area, page, len(articles))
 
-        logger.info("[OTM] %s page %d: %d listings parsed", area, page, len(page_listings))
-
-        if not page_listings:
+        if not articles:
+            # Log snippet to diagnose
+            logger.warning("[OTM] No articles found. Page title: %s | First 300 chars: %s",
+                           soup.title.string if soup.title else "?",
+                           soup.get_text()[:300])
             break
 
-        for listing in page_listings:
-            if not listing.get("url"):
+        page_count = 0
+        for article in articles:
+            listing = _parse_article(article, area)
+            if not listing or not listing.get("url"):
                 continue
+
             price = listing.get("price")
             if price and (price < min_price or price > max_price):
                 continue
@@ -237,9 +163,14 @@ def scrape_area(area: str, min_price: int, max_price: int, delay: float = 3.0) -
                 )
                 conn.commit()
                 new_listings.append(listing)
-                logger.info("[OTM] NEW: %s — £%s", listing.get("title"), listing.get("price"))
+                page_count += 1
+                logger.info("[OTM] NEW: %s — £%s", listing.get("title","?")[:60], listing.get("price"))
             except Exception as exc:
                 logger.debug("[OTM] DB insert error: %s", exc)
+
+        logger.info("[OTM] %s page %d: %d new listings saved", area, page, page_count)
+        if len(articles) < 10:
+            break  # last page
 
     conn.close()
     return new_listings

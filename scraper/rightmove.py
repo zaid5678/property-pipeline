@@ -25,22 +25,84 @@ AUTOCOMPLETE_URL = (
 )
 
 
+# Hardcoded fallback IDs for common UK cities — used if the typeahead API fails.
+_LOCATION_FALLBACK = {
+    "birmingham":     "REGION^85168",
+    "manchester":     "REGION^85191",
+    "leeds":          "REGION^85208",
+    "nottingham":     "REGION^85194",
+    "sheffield":      "REGION^85203",
+    "liverpool":      "REGION^85186",
+    "bradford":       "REGION^85169",
+    "leicester":      "REGION^85185",
+    "london":         "REGION^87490",
+    "bristol":        "REGION^85173",
+    "coventry":       "REGION^85179",
+    "derby":          "REGION^85180",
+    "wolverhampton":  "REGION^85213",
+    "stoke-on-trent": "REGION^85205",
+    "hull":           "REGION^85183",
+    "newcastle":      "REGION^85193",
+    "sunderland":     "REGION^85206",
+    "reading":        "REGION^85198",
+    "edinburgh":      "REGION^85298",
+    "glasgow":        "REGION^85304",
+    "cardiff":        "REGION^87428",
+}
+
+_homepage_fetched = False
+
+
+def _ensure_cookies() -> None:
+    """Fetch Rightmove homepage once per session to obtain cookies.
+    Without this the typeahead API returns an empty body."""
+    global _homepage_fetched
+    if _homepage_fetched:
+        return
+    try:
+        SESSION.get("https://www.rightmove.co.uk/", timeout=15)
+        _homepage_fetched = True
+        logger.info("[Rightmove] Homepage fetched — cookies established")
+    except Exception as exc:
+        logger.warning("[Rightmove] Could not fetch homepage: %s", exc)
+
+
 def _resolve_location_id(area: str, delay: float) -> str | None:
+    _ensure_cookies()
     time.sleep(delay + random.uniform(0.3, 0.8))
+
     url = AUTOCOMPLETE_URL.format(query=quote_plus(area))
     try:
-        resp = SESSION.get(url, timeout=15)
+        resp = SESSION.get(
+            url,
+            timeout=15,
+            headers={
+                "Referer": "https://www.rightmove.co.uk/",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
         resp.raise_for_status()
+        if not resp.text.strip():
+            raise ValueError("Empty response body")
         data = resp.json()
         results = data.get("typeAheadLocations", [])
         if results:
             loc_id = results[0].get("locationIdentifier", "")
             logger.info("[Rightmove] Resolved '%s' → %s", area, loc_id)
             return loc_id
-        logger.warning("[Rightmove] No location results for '%s'. Response: %s", area, str(data)[:200])
+        logger.warning("[Rightmove] No typeahead results for '%s'", area)
     except Exception as exc:
-        logger.warning("[Rightmove] Location lookup failed for '%s': %s", area, exc)
-    return None
+        logger.warning("[Rightmove] Typeahead failed for '%s': %s — trying fallback", area, exc)
+
+    # Fallback: hardcoded location IDs
+    slug = area.lower().strip()
+    loc_id = _LOCATION_FALLBACK.get(slug)
+    if loc_id:
+        logger.info("[Rightmove] Using fallback location ID for '%s': %s", area, loc_id)
+    else:
+        logger.warning("[Rightmove] No fallback location ID for '%s' — skipping", area)
+    return loc_id
 
 
 def _build_search_url(location_id: str, min_price: int, max_price: int, index: int = 0) -> str:

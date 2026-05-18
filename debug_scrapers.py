@@ -24,7 +24,6 @@ HEADERS = {
 
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
-
 SEP = "=" * 60
 
 
@@ -37,114 +36,101 @@ def check_onthemarket():
         print(f"Status: {r.status_code}  |  Size: {len(r.text)} chars")
 
         soup = BeautifulSoup(r.text, "lxml")
+        articles = soup.select("article")
+        print(f"Article elements: {len(articles)}")
 
-        # Check for __NEXT_DATA__
-        nd = soup.find("script", {"id": "__NEXT_DATA__"})
-        if nd and nd.string:
-            print(f"__NEXT_DATA__ found — {len(nd.string)} chars")
-            try:
-                data = json.loads(nd.string)
-                page_props = data.get("props", {}).get("pageProps", {})
-                print(f"pageProps keys: {list(page_props.keys())}")
+        if articles:
+            print(f"\n--- First article HTML (first 1500 chars) ---")
+            print(str(articles[0])[:1500])
+            print("---")
 
-                # Recursively find any list with >3 items (likely the property list)
-                def find_lists(obj, path=""):
-                    if isinstance(obj, list) and len(obj) > 3:
-                        print(f"  LIST at '{path}': {len(obj)} items, first keys: {list(obj[0].keys()) if obj and isinstance(obj[0], dict) else 'non-dict'}")
-                    elif isinstance(obj, dict):
-                        for k, v in obj.items():
-                            find_lists(v, f"{path}.{k}")
-
-                find_lists(page_props, "pageProps")
-            except Exception as e:
-                print(f"JSON parse error: {e}")
-                print(f"__NEXT_DATA__ snippet: {nd.string[:300]}")
-        else:
-            print("NO __NEXT_DATA__ found")
-            print(f"Page title: {soup.title.string if soup.title else 'no title'}")
-            print(f"First 500 chars of body: {soup.get_text()[:500]}")
-
-        # Count any listing-shaped elements
-        for sel in ["li[data-testid]", "div[data-testid]", "[class*='property']",
-                    "[class*='listing']", "article"]:
-            els = soup.select(sel)
-            if els:
-                print(f"Selector '{sel}': {len(els)} elements")
+            # Try to find prices
+            for i, art in enumerate(articles[:3]):
+                price_match = re.search(r"£([\d,]+)", art.get_text())
+                links = [a.get("href","") for a in art.find_all("a", href=True)]
+                print(f"Article {i+1}: price={'£'+price_match.group(1) if price_match else 'none'} | links={links[:2]}")
 
     except Exception as e:
         print(f"ERROR: {e}")
 
 
 def check_rightmove():
-    print(f"\n{SEP}\nRIGHTMOVE — location lookup\n{SEP}")
+    print(f"\n{SEP}\nRIGHTMOVE — fetching homepage for cookies\n{SEP}")
+    try:
+        r = SESSION.get("https://www.rightmove.co.uk/", timeout=15)
+        print(f"Homepage status: {r.status_code} | cookies: {list(SESSION.cookies.keys())}")
+    except Exception as e:
+        print(f"Homepage ERROR: {e}")
 
-    # Step 1: resolve location ID
+    print(f"\n{SEP}\nRIGHTMOVE — typeahead\n{SEP}")
     turl = "https://www.rightmove.co.uk/typeAhead/uknoauth?input=Birmingham&rent=false&sale=true"
-    print(f"Typeahead URL: {turl}")
-    loc_id = None
+    print(f"URL: {turl}")
     try:
         time.sleep(2)
-        r = SESSION.get(turl, timeout=15)
-        print(f"Status: {r.status_code}")
-        data = r.json()
-        print(f"Response: {json.dumps(data)[:400]}")
-        results = data.get("typeAheadLocations", [])
-        if results:
-            loc_id = results[0].get("locationIdentifier")
-            print(f"Location ID: {loc_id}")
+        r = SESSION.get(
+            turl, timeout=15,
+            headers={
+                "Referer": "https://www.rightmove.co.uk/",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        )
+        print(f"Status: {r.status_code} | Body length: {len(r.text)}")
+        print(f"Raw response: {repr(r.text[:300])}")
+
+        if r.text.strip():
+            data = r.json()
+            results = data.get("typeAheadLocations", [])
+            print(f"Locations returned: {len(results)}")
+            if results:
+                print(f"First result: {results[0]}")
+                loc_id = results[0].get("locationIdentifier")
+
+                # Test a search with this ID
+                from urllib.parse import quote_plus
+                search_url = (
+                    f"https://www.rightmove.co.uk/property-for-sale/find.html"
+                    f"?locationIdentifier={quote_plus(loc_id)}"
+                    f"&minPrice=50000&maxPrice=250000&index=0&includeSSTC=false&sortType=6"
+                )
+                print(f"\n{SEP}\nRIGHTMOVE — search with ID {loc_id}\n{SEP}")
+                print(f"URL: {search_url}")
+                time.sleep(3)
+                sr = SESSION.get(search_url, timeout=20)
+                print(f"Status: {sr.status_code} | Size: {len(sr.text)}")
+                ssoup = BeautifulSoup(sr.text, "lxml")
+                has_jm = any("jsonModel" in (t.string or "") for t in ssoup.find_all("script"))
+                print(f"Has jsonModel: {has_jm}")
+                if has_jm:
+                    for t in ssoup.find_all("script"):
+                        if "jsonModel" in (t.string or ""):
+                            m = re.search(r'"properties"\s*:\s*\[', t.string)
+                            count = len(re.findall(r'"propertyUrl"', t.string or ""))
+                            print(f"'properties' array found: {bool(m)} | propertyUrl count: {count}")
         else:
-            print("No locations returned")
-    except Exception as e:
-        print(f"Typeahead ERROR: {e}")
-
-    if not loc_id:
-        print("Skipping search — no location ID")
-        return
-
-    print(f"\n{SEP}\nRIGHTMOVE — search\n{SEP}")
-    from urllib.parse import quote_plus
-    url = (
-        f"https://www.rightmove.co.uk/property-for-sale/find.html"
-        f"?locationIdentifier={quote_plus(loc_id)}"
-        f"&minPrice=50000&maxPrice=250000&index=0&includeSSTC=false&sortType=6"
-    )
-    print(f"URL: {url}")
-    try:
-        time.sleep(3)
-        r = SESSION.get(url, timeout=20)
-        print(f"Status: {r.status_code}  |  Size: {len(r.text)} chars")
-
-        soup = BeautifulSoup(r.text, "lxml")
-        print(f"Page title: {soup.title.string if soup.title else 'no title'}")
-
-        # Check for jsonModel
-        jm_found = False
-        for tag in soup.find_all("script"):
-            text = tag.string or ""
-            if "jsonModel" in text:
-                jm_found = True
-                print(f"jsonModel script found ({len(text)} chars)")
-                match = re.search(r'"properties"\s*:\s*(\[)', text)
-                if match:
-                    print("'properties' array found inside jsonModel")
-                else:
-                    print("NO 'properties' array in jsonModel")
-                    print(f"jsonModel snippet: {text[text.find('jsonModel'):text.find('jsonModel')+200]}")
-                break
-        if not jm_found:
-            print("NO jsonModel found in any script tag")
-            print(f"Script tags: {len(soup.find_all('script'))}")
-            print(f"First 500 chars: {r.text[:500]}")
-
-        # HTML card check
-        for sel in ["div.l-searchResult", "[data-test='propertyCard']",
-                    ".propertyCard", "[class*='propertyCard']"]:
-            els = soup.select(sel)
-            if els:
-                print(f"HTML selector '{sel}': {len(els)} cards")
+            print("Empty body — trying fallback location ID")
+            from urllib.parse import quote_plus
+            loc_id = "REGION^85168"  # Birmingham fallback
+            search_url = (
+                f"https://www.rightmove.co.uk/property-for-sale/find.html"
+                f"?locationIdentifier={quote_plus(loc_id)}"
+                f"&minPrice=50000&maxPrice=250000&index=0&includeSSTC=false&sortType=6"
+            )
+            print(f"Search URL with fallback ID: {search_url}")
+            time.sleep(3)
+            sr = SESSION.get(search_url, timeout=20)
+            print(f"Status: {sr.status_code} | Size: {len(sr.text)}")
+            ssoup = BeautifulSoup(sr.text, "lxml")
+            has_jm = any("jsonModel" in (t.string or "") for t in ssoup.find_all("script"))
+            count = 0
+            for t in ssoup.find_all("script"):
+                count += len(re.findall(r'"propertyUrl"', t.string or ""))
+            print(f"Has jsonModel: {has_jm} | propertyUrl occurrences: {count}")
 
     except Exception as e:
-        print(f"Search ERROR: {e}")
+        import traceback
+        print(f"ERROR: {e}")
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
