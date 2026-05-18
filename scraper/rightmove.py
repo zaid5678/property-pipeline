@@ -105,19 +105,20 @@ def _resolve_location_id(area: str, delay: float) -> str | None:
     return loc_id
 
 
-def _build_search_url(location_id: str, min_price: int, max_price: int, index: int = 0) -> str:
-    # Note: no mustHave=priceReduced — that parameter doesn't exist on Rightmove.
-    # We scrape all listings in the price range; the price range itself targets
-    # below-market properties.
-    return (
+def _build_search_url(location_id: str, min_price: int, max_price: int,
+                      index: int = 0, keywords: str = "") -> str:
+    url = (
         f"{BASE_URL}/property-for-sale/find.html"
         f"?locationIdentifier={quote_plus(location_id)}"
         f"&minPrice={min_price}"
         f"&maxPrice={max_price}"
         f"&index={index}"
         f"&includeSSTC=false"
-        f"&sortType=6"  # sort by newest first
+        f"&sortType=6"  # newest first
     )
+    if keywords:
+        url += f"&keywords={quote_plus(keywords)}"
+    return url
 
 
 def _parse_price(val) -> int | None:
@@ -209,7 +210,8 @@ def _parse_html_cards(soup, area: str) -> list[dict]:
     return listings
 
 
-def scrape_area(area: str, min_price: int, max_price: int, delay: float = 3.0) -> list[dict]:
+def scrape_area(area: str, min_price: int, max_price: int,
+                delay: float = 3.0, keywords: str = "") -> list[dict]:
     new_listings = []
     conn = get_conn()
 
@@ -219,7 +221,7 @@ def scrape_area(area: str, min_price: int, max_price: int, delay: float = 3.0) -
         return []
 
     for page_idx in [0, 24, 48]:
-        url = _build_search_url(location_id, min_price, max_price, page_idx)
+        url = _build_search_url(location_id, min_price, max_price, page_idx, keywords)
         logger.info("[Rightmove] Fetching %s", url)
         soup = fetch(url, delay=delay)
         if not soup:
@@ -303,11 +305,28 @@ def run_scraper(config: dict) -> list[dict]:
     max_p = config["scraper"]["price"]["max"]
     delay = config["scraper"].get("request_delay", 3)
 
+    keyword_searches = [
+        "refurbishment",
+        "renovation",
+        "no chain",
+        "cash buyer",
+        "probate",
+        "reduced",
+    ]
+
     for area in areas:
+        # General search
         try:
             all_new.extend(scrape_area(area, min_p, max_p, delay))
         except Exception as exc:
             logger.error("[Rightmove] Error scraping %s: %s", area, exc)
+
+        # Keyword-targeted searches (Rightmove supports one keyword at a time)
+        for kw in keyword_searches:
+            try:
+                all_new.extend(scrape_area(area, min_p, max_p, delay, keywords=kw))
+            except Exception as exc:
+                logger.error("[Rightmove] Error scraping %s keyword '%s': %s", area, kw, exc)
 
     logger.info("[Rightmove] Done. %d new listings.", len(all_new))
     return all_new

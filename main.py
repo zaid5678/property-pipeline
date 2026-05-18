@@ -92,14 +92,9 @@ def run_scrape_cycle(config: dict) -> None:
     if not alert_email:
         logger.warning("[Main] ALERT_EMAIL not set — skipping all emails")
     elif config.get("alerts", {}).get("email_enabled", True):
-        # Send individual alerts for each new listing
-        if all_new:
-            sent = send_batch_alerts(all_new, alert_email)
-            logger.info("[Main] Sent %d individual listing alerts to %s", sent, alert_email)
-
-        # Always send daily summary so you know the scraper ran
-        ok = send_daily_summary(all_new, errors, alert_email)
-        logger.info("[Main] Daily summary email %s", "sent" if ok else "FAILED")
+        kws = config.get("alerts", {}).get("opportunity_keywords", [])
+        ok = send_daily_summary(all_new, errors, alert_email, opportunity_keywords=kws)
+        logger.info("[Main] Daily digest email %s", "sent" if ok else "FAILED")
 
     logger.info("[Main] Scrape cycle complete.\n")
 

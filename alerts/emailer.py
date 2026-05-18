@@ -158,72 +158,184 @@ def send_batch_alerts(listings: list[dict], alert_email: str) -> int:
     return sent
 
 
+def _opportunity_tags(listing: dict, keywords: list[str]) -> list[str]:
+    """Return which opportunity keywords matched this listing."""
+    haystack = " ".join([
+        listing.get("title", ""),
+        listing.get("description", ""),
+        listing.get("location", ""),
+    ]).lower()
+    return [kw for kw in keywords if kw.lower() in haystack]
+
+
+def _listing_row_html(listing: dict, tags: list[str]) -> str:
+    price = f"£{listing['price']:,}" if listing.get("price") else "POA"
+    phone = listing.get("phone") or "—"
+    title = listing.get("title", "—")[:70]
+    source = listing.get("source", "").capitalize()
+    url = listing.get("url", "#")
+    tag_html = ""
+    if tags:
+        tag_html = " ".join(
+            f'<span style="display:inline-block;background:#fff3cd;color:#856404;'
+            f'border-radius:3px;padding:1px 5px;font-size:0.7em;margin:1px">{t}</span>'
+            for t in tags[:4]
+        )
+    return f"""
+    <tr>
+      <td style="padding:8px 10px;font-size:0.8em;color:#666">{source}</td>
+      <td style="padding:8px 10px">
+        <a href="{url}" style="color:#1a3a5c;font-weight:600;text-decoration:none">{title}</a>
+        {'<br>' + tag_html if tag_html else ''}
+      </td>
+      <td style="padding:8px 10px;font-weight:700;color:#1a3a5c;white-space:nowrap">{price}</td>
+      <td style="padding:8px 10px;font-size:0.85em">{listing.get('location','—')[:40]}</td>
+      <td style="padding:8px 10px;color:#e74c3c;font-weight:700">{phone}</td>
+    </tr>"""
+
+
+def _section_table(listings_with_tags: list[tuple]) -> str:
+    if not listings_with_tags:
+        return '<p style="color:#7f8c8d;font-style:italic">None found.</p>'
+    rows = "".join(_listing_row_html(l, tags) for l, tags in listings_with_tags)
+    return f"""
+    <table style="width:100%;border-collapse:collapse;font-size:0.875em">
+      <thead>
+        <tr style="background:#1a3a5c;color:#fff">
+          <th style="padding:8px 10px;text-align:left">Source</th>
+          <th style="padding:8px 10px;text-align:left">Property</th>
+          <th style="padding:8px 10px;text-align:left">Price</th>
+          <th style="padding:8px 10px;text-align:left">Location</th>
+          <th style="padding:8px 10px;text-align:left">Phone</th>
+        </tr>
+      </thead>
+      <tbody>{rows}</tbody>
+    </table>"""
+
+
 def send_daily_summary(
     new_listings: list[dict],
     errors: list[str],
     alert_email: str,
+    opportunity_keywords: list[str] | None = None,
 ) -> bool:
     """
-    Send a daily run summary — always fires so you know the scraper ran,
-    even when no new listings were found.
+    Send a single daily digest email with all new listings.
+    Opportunity properties (matching keywords) are shown first, highlighted.
+    Always sends even when 0 listings found.
     """
     from datetime import datetime
-    count = len(new_listings)
-    gumtree_count = sum(1 for l in new_listings if l.get("source") == "gumtree")
-    rightmove_count = sum(1 for l in new_listings if l.get("source") == "rightmove")
-    otm_count = sum(1 for l in new_listings if l.get("source") == "onthemarket")
-    status_colour = "#27ae60" if count > 0 else "#7f8c8d"
-    status_text = f"{count} new listing{'s' if count != 1 else ''} found" if count > 0 else "No new listings found"
+
+    kws = opportunity_keywords or []
     timestamp = datetime.now().strftime("%d %B %Y, %H:%M UTC")
 
-    rows_html = ""
-    for l in new_listings[:20]:  # cap at 20 in summary
-        price = f"£{l['price']:,}" if l.get("price") else "POA"
-        phone = l.get("phone") or "—"
-        rows_html += f"""
-        <tr>
-          <td style="padding:7px 10px">{l.get('source','').capitalize()}</td>
-          <td style="padding:7px 10px"><a href="{l.get('url','#')}" style="color:#1a3a5c">{l.get('title','—')[:60]}</a></td>
-          <td style="padding:7px 10px;font-weight:bold">{price}</td>
-          <td style="padding:7px 10px">{l.get('location','—')}</td>
-          <td style="padding:7px 10px;color:#e74c3c;font-weight:bold">{phone}</td>
-        </tr>"""
+    # Tag each listing
+    opportunity = []   # (listing, matched_tags)
+    standard = []
+
+    for l in new_listings:
+        tags = _opportunity_tags(l, kws)
+        if tags:
+            opportunity.append((l, tags))
+        else:
+            standard.append((l, []))
+
+    total = len(new_listings)
+    opp_count = len(opportunity)
+    otm_count = sum(1 for l, _ in (opportunity + standard) if l.get("source") == "onthemarket")
+    rm_count = sum(1 for l, _ in (opportunity + standard) if l.get("source") == "rightmove")
+    gt_count = sum(1 for l, _ in (opportunity + standard) if l.get("source") == "gumtree")
+
+    status_colour = "#27ae60" if total > 0 else "#7f8c8d"
+    status_text = f"{total} new listing{'s' if total != 1 else ''} found" if total else "No new listings today"
 
     errors_html = ""
     if errors:
-        errors_html = "<h3 style='color:#e74c3c'>Errors</h3><ul>" + \
-                      "".join(f"<li>{e}</li>" for e in errors) + "</ul>"
+        errors_html = (
+            '<div style="background:#fdecea;border-left:4px solid #e74c3c;'
+            'padding:10px 14px;margin-top:16px;border-radius:4px">'
+            '<strong>Scraper errors:</strong><ul style="margin:4px 0 0">'
+            + "".join(f"<li style='font-size:0.85em'>{e}</li>" for e in errors)
+            + "</ul></div>"
+        )
 
     html = f"""
-<html><body style="font-family:Arial,sans-serif;max-width:680px;margin:auto">
-  <div style="background:#1a3a5c;padding:20px;border-radius:8px 8px 0 0">
-    <h2 style="color:#fff;margin:0">Property Pipeline — Daily Report</h2>
-    <p style="color:#aac4e4;margin:4px 0 0">{timestamp}</p>
+<html><body style="font-family:Arial,sans-serif;max-width:720px;margin:auto;color:#2c3e50">
+  <div style="background:#1a3a5c;padding:22px 24px;border-radius:8px 8px 0 0">
+    <h2 style="color:#fff;margin:0;font-size:1.3em">Property Pipeline — Daily Digest</h2>
+    <p style="color:#aac4e4;margin:5px 0 0;font-size:0.9em">{timestamp}</p>
   </div>
-  <div style="border:1px solid #ddd;border-top:none;padding:20px;border-radius:0 0 8px 8px">
-    <div style="background:#f4f8ff;border-radius:8px;padding:16px;margin-bottom:16px;
-                border-left:4px solid {status_colour}">
-      <span style="font-size:1.4em;font-weight:700;color:{status_colour}">{status_text}</span>
-      <div style="margin-top:6px;color:#555;font-size:0.9em">
-        OnTheMarket: {otm_count} &nbsp;|&nbsp; Rightmove: {rightmove_count} &nbsp;|&nbsp; Gumtree: {gumtree_count}
+  <div style="border:1px solid #ddd;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px">
+
+    <!-- Stats bar -->
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+      <div style="background:#f4f8ff;border-left:4px solid {status_colour};
+                  padding:12px 16px;border-radius:4px;flex:1;min-width:140px">
+        <div style="font-size:1.6em;font-weight:700;color:{status_colour}">{total}</div>
+        <div style="font-size:0.8em;color:#666">New listings</div>
+      </div>
+      <div style="background:#fff8e1;border-left:4px solid #f39c12;
+                  padding:12px 16px;border-radius:4px;flex:1;min-width:140px">
+        <div style="font-size:1.6em;font-weight:700;color:#f39c12">{opp_count}</div>
+        <div style="font-size:0.8em;color:#666">Opportunity properties</div>
+      </div>
+      <div style="background:#f9f9f9;border-left:4px solid #95a5a6;
+                  padding:12px 16px;border-radius:4px;flex:1;min-width:140px">
+        <div style="font-size:0.85em;color:#555;line-height:1.8">
+          OTM: <strong>{otm_count}</strong><br>
+          Rightmove: <strong>{rm_count}</strong><br>
+          Gumtree: <strong>{gt_count}</strong>
+        </div>
       </div>
     </div>
 
-    {'<table style="width:100%;border-collapse:collapse;font-size:0.875em"><thead><tr style="background:#1a3a5c;color:#fff"><th style="padding:8px 10px;text-align:left">Source</th><th style="padding:8px 10px;text-align:left">Title</th><th style="padding:8px 10px;text-align:left">Price</th><th style="padding:8px 10px;text-align:left">Location</th><th style="padding:8px 10px;text-align:left">Phone</th></tr></thead><tbody>' + rows_html + '</tbody></table>' if new_listings else '<p style="color:#7f8c8d">Nothing new today — check back tomorrow.</p>'}
+    <!-- Opportunity properties -->
+    <h3 style="color:#856404;background:#fff8e1;padding:10px 14px;border-radius:6px;
+               border-left:4px solid #f39c12;margin:0 0 12px">
+      ⭐ Opportunity Properties ({opp_count})
+      <span style="font-weight:400;font-size:0.8em;color:#666">
+        — refurb needed / no chain / motivated seller / undervalued
+      </span>
+    </h3>
+    {_section_table(opportunity) if opportunity else
+     '<p style="color:#7f8c8d;font-style:italic;margin-bottom:20px">None found today.</p>'}
+
+    <!-- All other new listings -->
+    <h3 style="color:#1a3a5c;margin:24px 0 12px">
+      All New Listings ({total})
+    </h3>
+    {_section_table(opportunity + standard)}
 
     {errors_html}
 
-    <p style="color:#aaa;font-size:0.8em;margin-top:20px">
-      Property Pipeline — automated daily report
+    <p style="color:#aaa;font-size:0.78em;margin-top:24px;border-top:1px solid #eee;padding-top:12px">
+      Property Pipeline — automated daily digest. Call the seller within minutes of a new listing going live.
     </p>
   </div>
 </body></html>"""
 
-    subject = f"Property Pipeline: {status_text} — {timestamp}"
-    text = f"Property Pipeline Daily Report\n{timestamp}\n\n{status_text}\nOnTheMarket: {otm_count} | Rightmove: {rightmove_count} | Gumtree: {gumtree_count}\n"
-    for l in new_listings:
-        price = f"£{l['price']:,}" if l.get("price") else "POA"
-        text += f"\n- {l.get('title','—')} | {price} | {l.get('location','—')} | {l.get('url','')}"
+    # Plain text fallback
+    text = f"Property Pipeline Daily Digest — {timestamp}\n{'='*50}\n"
+    text += f"Total: {total} | Opportunities: {opp_count} | OTM: {otm_count} | Rightmove: {rm_count}\n\n"
+    if opportunity:
+        text += "⭐ OPPORTUNITY PROPERTIES\n" + "-"*40 + "\n"
+        for l, tags in opportunity:
+            price = f"£{l['price']:,}" if l.get("price") else "POA"
+            text += f"{l.get('title','?')[:60]} | {price} | {', '.join(tags[:3])}\n{l.get('url','')}\n\n"
+    if standard:
+        text += "ALL LISTINGS\n" + "-"*40 + "\n"
+        for l, _ in standard:
+            price = f"£{l['price']:,}" if l.get("price") else "POA"
+            text += f"{l.get('title','?')[:60]} | {price} | {l.get('location','')}\n{l.get('url','')}\n\n"
+    if errors:
+        text += "ERRORS\n" + "\n".join(errors)
+
+    subject = (
+        f"🏠 {opp_count} opportunity propert{'ies' if opp_count != 1 else 'y'} found"
+        if opp_count > 0
+        else f"Property Pipeline: {status_text}"
+    )
+    subject += f" — {timestamp[:11]}"
 
     return _send(to=alert_email, subject=subject, html_body=html, text_body=text)
 

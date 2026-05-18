@@ -51,5 +51,47 @@ deals:
   payment_terms: "50% on exchange of contracts, 50% on completion"
 
 alerts:
-  # Set to true to send email alerts for new listings
+  # Set to true to send the daily digest email
   email_enabled: true
+
+  # Keywords that flag a property as an investment opportunity.
+  # The scraper searches for these on each portal AND scans descriptions.
+  # Properties matching any keyword are highlighted at the top of the email.
+  opportunity_keywords:
+    # Needs work / distressed
+    - refurbishment
+    - renovation
+    - modernisation
+    - needs updating
+    - requires updating
+    - in need of
+    - needs work
+    - tlc
+    - project
+    - dated
+    - tired
+    - as seen
+    - sold as seen
+    - structural
+    - damp
+    - uninhabitable
+    - derelict
+    # Motivated seller
+    - no chain
+    - chain free
+    - vacant possession
+    - probate
+    - executor
+    - quick sale
+    - must sell
+    - cash buyer
+    - cash buyers only
+    - reduced
+    - motivated
+    # Worst home on best street / upside
+    - scope for
+    - potential to extend
+    - planning permission
+    - development opportunity
+    - below market
+    - investment opportunity

@@ -18,9 +18,12 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://www.onthemarket.com"
 
 
-def _build_search_url(area: str, min_price: int, max_price: int, page: int = 1) -> str:
+def _build_search_url(area: str, min_price: int, max_price: int,
+                      page: int = 1, keywords: str = "") -> str:
     slug = area.lower().strip().replace(" ", "-")
     params = f"min-price={min_price}&max-price={max_price}"
+    if keywords:
+        params += f"&keywords={quote_plus(keywords)}"
     if page > 1:
         params += f"&page={page}"
     return f"{BASE_URL}/for-sale/property/{slug}/?{params}"
@@ -114,12 +117,13 @@ def _parse_article(article, area: str) -> dict | None:
     }
 
 
-def scrape_area(area: str, min_price: int, max_price: int, delay: float = 3.0) -> list[dict]:
+def scrape_area(area: str, min_price: int, max_price: int,
+                delay: float = 3.0, keywords: str = "") -> list[dict]:
     new_listings = []
     conn = get_conn()
 
     for page in range(1, 4):
-        url = _build_search_url(area, min_price, max_price, page)
+        url = _build_search_url(area, min_price, max_price, page, keywords)
         logger.info("[OTM] Fetching %s", url)
         soup = fetch(url, delay=delay)
         if not soup:
@@ -182,12 +186,30 @@ def run_scraper(config: dict) -> list[dict]:
     min_p = config["scraper"]["price"]["min"]
     max_p = config["scraper"]["price"]["max"]
     delay = config["scraper"].get("request_delay", 3)
+    kws = config.get("alerts", {}).get("opportunity_keywords", [])
+
+    # Keyword searches that target distressed/undervalued properties.
+    # We group keywords into a few focused searches to avoid too many requests.
+    keyword_searches = [
+        "refurbishment renovation modernisation",
+        "no chain chain free probate executor",
+        "cash buyer reduced motivated quick sale",
+        "project tlc needs updating as seen",
+    ]
 
     for area in areas:
+        # General search (all properties in price range)
         try:
             all_new.extend(scrape_area(area, min_p, max_p, delay))
         except Exception as exc:
             logger.error("[OTM] Error scraping %s: %s", area, exc)
+
+        # Keyword-targeted searches
+        for kw_group in keyword_searches:
+            try:
+                all_new.extend(scrape_area(area, min_p, max_p, delay, keywords=kw_group))
+            except Exception as exc:
+                logger.error("[OTM] Error scraping %s with keywords '%s': %s", area, kw_group, exc)
 
     logger.info("[OTM] Done. %d new listings.", len(all_new))
     return all_new
