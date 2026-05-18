@@ -42,6 +42,9 @@ jobs:
       - name: Create data directory
         run: mkdir -p data output
 
+      - name: Debug scrapers (diagnose site responses)
+        run: python debug_scrapers.py
+
       - name: Run scraper
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
