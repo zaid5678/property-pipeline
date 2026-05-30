@@ -38,7 +38,7 @@ from db.models import init_db
 from scraper.gumtree import run_scraper as gumtree_scraper
 from scraper.rightmove import run_scraper as rightmove_scraper
 from scraper.onthemarket import run_scraper as otm_scraper
-from alerts.emailer import send_batch_alerts, send_daily_summary
+import deal_analyser
 
 
 def load_config() -> dict:
@@ -88,13 +88,8 @@ def run_scrape_cycle(config: dict) -> None:
 
     logger.info("[Main] Total new listings this cycle: %d", len(all_new))
 
-    alert_email = os.environ.get("ALERT_EMAIL", "")
-    if not alert_email:
-        logger.warning("[Main] ALERT_EMAIL not set — skipping all emails")
-    elif config.get("alerts", {}).get("email_enabled", True):
-        kws = config.get("alerts", {}).get("opportunity_keywords", [])
-        ok = send_daily_summary(all_new, errors, alert_email, opportunity_keywords=kws)
-        logger.info("[Main] Daily digest email %s", "sent" if ok else "FAILED")
+    # Run BRR deal analysis on every new listing, then send one email with results
+    deal_analyser.run(all_new, errors, config)
 
     logger.info("[Main] Scrape cycle complete.\n")
 
